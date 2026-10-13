@@ -1,0 +1,235 @@
+{
+  "info": {
+    "_postman_id": "5f476658-2ad1-4a78-8f15-3d088978ea4c",
+    "name": "SpecPay",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "58792387",
+    "_collection_link": "https://go.postman.co/collection/58792387-5f476658-2ad1-4a78-8f15-3d088978ea4c?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "1 - Get token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "   pm.collectionVariables.set(\"access_token\", pm.response.json().access_token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": {
+          "type": "basic",
+          "basic": [
+            {
+              "key": "username",
+              "value": "{{client_id}}",
+              "type": "string"
+            },
+            {
+              "key": "password",
+              "value": "{{secret}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "client_credentials"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{base}}/v1/oauth2/token",
+          "host": [
+            "{{base}}"
+          ],
+          "path": [
+            "v1",
+            "oauth2",
+            "token"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "2 - Create order",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "   pm.collectionVariables.set(\"order_id\", pm.response.json().id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "   {\r\n  \"intent\": \"AUTHORIZE\",\r\n  \"purchase_units\": [\r\n    {\r\n      \"reference_id\": \"milestone_1\",\r\n      \"amount\": { \"currency_code\": \"USD\", \"value\": \"50.00\" }\r\n    }\r\n  ],\r\n  \"payment_source\": {\r\n    \"paypal\": {\r\n      \"experience_context\": {\r\n        \"return_url\": \"https://example.com/return\",\r\n        \"cancel_url\": \"https://example.com/cancel\",\r\n        \"user_action\": \"PAY_NOW\"\r\n      }\r\n    }\r\n  }\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base}}/v2/checkout/orders",
+          "host": [
+            "{{base}}"
+          ],
+          "path": [
+            "v2",
+            "checkout",
+            "orders"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "4 - Authorize",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "   const r = pm.response.json();\r\n   pm.collectionVariables.set(\"auth_id\", r.purchase_units[0].payments.authorizations[0].id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base}}/v2/checkout/orders/{{order_id}}/authorize",
+          "host": [
+            "{{base}}"
+          ],
+          "path": [
+            "v2",
+            "checkout",
+            "orders",
+            "{{order_id}}",
+            "authorize"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "5 - Capture",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{access_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base}}/v2/payments/authorizations/{{auth_id}}/capture",
+          "host": [
+            "{{base}}"
+          ],
+          "path": [
+            "v2",
+            "payments",
+            "authorizations",
+            "{{auth_id}}",
+            "capture"
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base",
+      "value": ""
+    },
+    {
+      "key": "secret",
+      "value": "EHQluRh5vTDtr_o28XE183Br16f1Sm9Sn2nySewHdxYS-imP-Mrd9ceVPxYBKkqHtPjU7GnBBvVYbf40"
+    },
+    {
+      "key": "access_token\t",
+      "value": ""
+    },
+    {
+      "key": "order_id",
+      "value": ""
+    },
+    {
+      "key": "auth_id",
+      "value": ""
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "client_id",
+      "value": ""
+    }
+  ]
+}
