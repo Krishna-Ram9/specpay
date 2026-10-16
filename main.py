@@ -1,4 +1,4 @@
-"""SpecPay backend starter: PayPal Orders v2 (authorize -> capture) + webhooks."""
+"""SpecPay backend: milestone state machine on top of PayPal Orders v2 + webhooks."""
 import logging
 import os
 import time
@@ -9,6 +9,8 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 load_dotenv()
+import db  # imported after load_dotenv so SPECPAY_DB from .env is honoured  # noqa: E402
+
 log = logging.getLogger("specpay")
 logging.basicConfig(level=logging.INFO)
 
@@ -20,10 +22,12 @@ RETURN_URL = os.getenv("RETURN_URL", "http://localhost:8000/return")
 CANCEL_URL = os.getenv("CANCEL_URL", "http://localhost:8000/cancel")
 
 app = FastAPI(title="SpecPay")
+db.init_db()
 _token = {"value": None, "expires_at": 0.0}
 
 
-async def paypal(method: str, path: str, json: dict | None = None, headers: dict | None = None) -> dict:
+# ---------------------------------------------------------------- PayPal helper
+async def paypal(method: str, path: str, json: dict | None = None) -> dict:
     """Call PayPal with a cached OAuth token. Raises HTTPException on PayPal errors."""
     async with httpx.AsyncClient(timeout=30) as client:
         if not _token["value"] or time.time() > _token["expires_at"] - 60:
@@ -42,27 +46,68 @@ async def paypal(method: str, path: str, json: dict | None = None, headers: dict
             method,
             f"{PAYPAL_BASE}{path}",
             json=json if json is not None else ({} if method == "POST" else None),
-            headers={"Authorization": f"Bearer {_token['value']}", **(headers or {})},
+            headers={"Authorization": f"Bearer {_token['value']}"},
         )
         if r.status_code >= 400:
             raise HTTPException(r.status_code, r.json() if r.content else r.text)
         return r.json() if r.content else {}
 
 
-class FundRequest(BaseModel):
-    reference_id: str          # e.g. your milestone id
-    amount: str                # e.g. "50.00"
+# ---------------------------------------------------------------- helpers
+def get_or_404(mid: str) -> dict:
+    m = db.get(mid)
+    if not m:
+        raise HTTPException(404, "Milestone not found")
+    return m
+
+
+def require_status(m: dict, *allowed: str) -> None:
+    if m["status"] not in allowed:
+        raise HTTPException(
+            409, f"Milestone is '{m['status']}'; this action needs one of: {', '.join(allowed)}"
+        )
+
+
+# ---------------------------------------------------------------- models
+class MilestoneCreate(BaseModel):
+    project: str
+    title: str
+    amount: str                 # e.g. "50.00"
     currency: str = "USD"
+    criteria: str | None = None  # acceptance criteria (used by the AI review later)
 
 
-@app.post("/milestones/fund")
-async def fund_milestone(req: FundRequest):
+class Note(BaseModel):
+    note: str = ""
+
+
+# ---------------------------------------------------------------- milestone endpoints
+@app.post("/milestones")
+async def create_milestone(body: MilestoneCreate):
+    return db.create_milestone(body.project, body.title, body.amount, body.currency, body.criteria)
+
+
+@app.get("/milestones")
+async def list_milestones(project: str | None = None):
+    return db.list_milestones(project)
+
+
+@app.get("/milestones/{mid}")
+async def read_milestone(mid: str):
+    m = get_or_404(mid)
+    return {**m, "history": db.history(mid)}
+
+
+@app.post("/milestones/{mid}/fund")
+async def fund(mid: str):
     """Create an AUTHORIZE order. Send the buyer to approve_url."""
+    m = get_or_404(mid)
+    require_status(m, "draft", "awaiting_payment")
     order = await paypal("POST", "/v2/checkout/orders", {
         "intent": "AUTHORIZE",
         "purchase_units": [{
-            "reference_id": req.reference_id,
-            "amount": {"currency_code": req.currency, "value": req.amount},
+            "reference_id": mid,
+            "amount": {"currency_code": m["currency"], "value": m["amount"]},
         }],
         "payment_source": {"paypal": {"experience_context": {
             "return_url": RETURN_URL,
@@ -73,29 +118,60 @@ async def fund_milestone(req: FundRequest):
     approve_url = next(
         (l["href"] for l in order["links"] if l["rel"] in ("payer-action", "approve")), None
     )
-    return {"order_id": order["id"], "status": order["status"], "approve_url": approve_url}
+    db.transition(mid, "awaiting_payment", note="PayPal order created", order_id=order["id"])
+    return {"milestone": db.get(mid), "approve_url": approve_url}
 
 
-@app.post("/orders/{order_id}/authorize")
-async def authorize_order(order_id: str):
+@app.post("/milestones/{mid}/authorize")
+async def authorize(mid: str):
     """Call after the buyer approves. Holds the funds."""
-    res = await paypal("POST", f"/v2/checkout/orders/{order_id}/authorize")
+    m = get_or_404(mid)
+    require_status(m, "awaiting_payment")
+    res = await paypal("POST", f"/v2/checkout/orders/{m['order_id']}/authorize")
     auth = res["purchase_units"][0]["payments"]["authorizations"][0]
-    return {"authorization_id": auth["id"], "status": auth["status"]}
+    return db.transition(mid, "funded", note="funds held", auth_id=auth["id"])
 
 
-@app.post("/authorizations/{auth_id}/capture")
-async def capture(auth_id: str):
-    """Release the held funds (call this when the AI review passes)."""
-    res = await paypal("POST", f"/v2/payments/authorizations/{auth_id}/capture")
-    return {"capture_id": res["id"], "status": res["status"]}
+@app.post("/milestones/{mid}/submit")
+async def submit(mid: str, body: Note = Note()):
+    """Freelancer delivers the work (AI review hooks in here later)."""
+    m = get_or_404(mid)
+    require_status(m, "funded")
+    return db.transition(mid, "submitted", note=body.note or "deliverable submitted")
 
 
-@app.post("/authorizations/{auth_id}/void")
-async def void(auth_id: str):
-    """Cancel the hold (milestone rejected or abandoned)."""
-    await paypal("POST", f"/v2/payments/authorizations/{auth_id}/void")
-    return {"status": "VOIDED"}
+@app.post("/milestones/{mid}/reject")
+async def reject(mid: str, body: Note = Note()):
+    """Review failed: back to 'funded' so the freelancer can resubmit."""
+    m = get_or_404(mid)
+    require_status(m, "submitted")
+    return db.transition(mid, "funded", note=body.note or "review rejected")
+
+
+@app.post("/milestones/{mid}/approve")
+async def approve(mid: str, body: Note = Note()):
+    m = get_or_404(mid)
+    require_status(m, "submitted")
+    return db.transition(mid, "approved", note=body.note or "review passed")
+
+
+@app.post("/milestones/{mid}/release")
+async def release(mid: str):
+    """Capture the held funds. Only allowed once the milestone is approved."""
+    m = get_or_404(mid)
+    require_status(m, "approved")
+    res = await paypal("POST", f"/v2/payments/authorizations/{m['auth_id']}/capture")
+    return db.transition(mid, "released", note="payment captured", capture_id=res["id"])
+
+
+@app.post("/milestones/{mid}/void")
+async def void(mid: str, body: Note = Note()):
+    """Cancel the milestone; releases any PayPal hold."""
+    m = get_or_404(mid)
+    require_status(m, "draft", "awaiting_payment", "funded", "submitted", "approved")
+    if m["auth_id"]:
+        await paypal("POST", f"/v2/payments/authorizations/{m['auth_id']}/void")
+    return db.transition(mid, "voided", note=body.note or "voided")
 
 
 @app.get("/return")
@@ -108,9 +184,14 @@ async def cancel_page():
     return {"message": "Payment cancelled."}
 
 
+# ---------------------------------------------------------------- webhooks
+def _related(resource: dict) -> dict:
+    return (resource.get("supplementary_data") or {}).get("related_ids") or {}
+
+
 @app.post("/webhooks/paypal")
 async def paypal_webhook(request: Request):
-    """Receive PayPal events. Signature is verified once PAYPAL_WEBHOOK_ID is set."""
+    """Receive PayPal events and keep milestone state in sync."""
     event = await request.json()
     if WEBHOOK_ID:
         h = request.headers
@@ -128,7 +209,28 @@ async def paypal_webhook(request: Request):
     else:
         log.warning("PAYPAL_WEBHOOK_ID not set: webhook signature NOT verified")
 
-    log.info("PayPal event: %s", event.get("event_type"))
-    # TODO: map event_type to milestone state changes
-    # (e.g. PAYMENT.AUTHORIZATION.CREATED -> funded, PAYMENT.CAPTURE.COMPLETED -> released)
+    etype = event.get("event_type", "")
+    if not db.mark_event(event.get("id", ""), etype):
+        return {"received": True, "duplicate": True}  # PayPal retries; stay idempotent
+
+    resource = event.get("resource", {})
+    rel = _related(resource)
+    log.info("PayPal event: %s", etype)
+    try:
+        if etype == "PAYMENT.AUTHORIZATION.CREATED":
+            m = db.find_by(order_id=rel.get("order_id"))
+            if m:
+                db.transition(m["id"], "funded", note="webhook: authorization created", auth_id=resource["id"])
+        elif etype == "PAYMENT.AUTHORIZATION.VOIDED":
+            m = db.find_by(auth_id=resource.get("id"))
+            if m:
+                db.transition(m["id"], "voided", note="webhook: authorization voided")
+        elif etype == "PAYMENT.CAPTURE.COMPLETED":
+            m = db.find_by(order_id=rel.get("order_id"), auth_id=rel.get("authorization_id"))
+            if m:
+                db.transition(m["id"], "released", note="webhook: capture completed", capture_id=resource["id"])
+        else:
+            log.info("Unhandled event type: %s", etype)
+    except ValueError as exc:
+        log.warning("Ignoring webhook that doesn't fit the milestone state: %s", exc)
     return {"received": True}
