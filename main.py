@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 load_dotenv()
@@ -236,6 +237,12 @@ async def ai_review(mid: str, body: ReviewRequest):
         reasons = "; ".join(result["missing"]) or result["summary"]
         db.transition(mid, "funded", note=f"AI review failed: {reasons[:300]}")
     return {"verdict": result["verdict"], "review": result, "milestone": db.get(mid)}
+
+
+@app.get("/", include_in_schema=False)
+async def home():
+    """The single-page demo UI."""
+    return FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html"))
 
 
 @app.get("/return")

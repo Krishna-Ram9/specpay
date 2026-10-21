@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpecPay - AI-verified milestone payments</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#14171f;--muted:#5b6575;--line:#e2e6ec;--accent:#0b5fff;--ok:#0a7d44;--bad:#b42318;--warn:#a15c00}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1116;--card:#171b22;--text:#e8ebf0;--muted:#9aa4b2;--line:#2a313c;--accent:#5b9bff;--ok:#3ccf8e;--bad:#ff7b72;--warn:#e3b341}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:920px;margin:0 auto;padding:28px 18px 60px}
+h1{margin:0;font-size:30px}h2{margin:0 0 10px;font-size:20px}
+.tag{margin:6px 0 16px;color:var(--muted)}
+.muted{color:var(--muted)}
+.flow{display:flex;flex-wrap:wrap;gap:8px;padding:0;margin:0 0 24px;list-style:none;font-size:14px}
+.flow li{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 12px}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:20px}
+label{display:block;font-weight:600;margin:10px 0 4px}
+textarea,input[type=text]{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit}
+textarea{min-height:92px;resize:vertical}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.row>div{flex:1;min-width:140px}
+.btn{display:inline-block;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:8px;padding:8px 14px;font:inherit;font-size:14px;cursor:pointer;text-decoration:none}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn.danger{background:transparent;border-color:var(--bad);color:var(--bad)}
+.btn:disabled{opacity:.55;cursor:wait}
+.bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:transparent;color:var(--text);padding:7px 14px;font:inherit;font-size:14px;cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff}
+.project{margin:18px 0 6px;font-weight:700}
+.ms{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0}
+.top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.title{font-weight:600}
+.amt{font-variant-numeric:tabular-nums;font-weight:600}
+.crit{margin:6px 0;color:var(--muted);font-size:14px}
+.badge{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 10px;margin-left:8px;text-transform:uppercase;letter-spacing:.03em}
+.s-funded,.s-approved{color:var(--accent);border-color:var(--accent)}
+.s-released{color:var(--ok);border-color:var(--ok)}
+.s-voided{color:var(--bad);border-color:var(--bad)}
+.s-submitted,.s-awaiting_payment{color:var(--warn);border-color:var(--warn)}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center}
+.review{border-left:4px solid var(--line);padding:6px 12px;margin-top:10px;font-size:14px}
+.review.pass{border-color:var(--ok)}.review.fail{border-color:var(--bad)}
+.review ul{margin:6px 0 0;padding-left:18px}
+.hist{font-size:13px;color:var(--muted);margin:8px 0 0;padding-left:18px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);max-width:90%;padding:10px 16px;border-radius:8px;background:#222;color:#fff;font-size:14px;display:none;z-index:9}
+#toast.err{background:var(--bad)}
+footer{color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<main>
+  <h1>SpecPay</h1>
+  <p class="tag">AI-scoped milestones, PayPal-held funds, and payment released only when the work matches the spec.</p>
+  <ol class="flow">
+    <li>1. AI scopes the brief</li><li>2. Client funds a milestone (PayPal)</li>
+    <li>3. Freelancer submits work</li><li>4. AI checks it against the spec</li><li>5. Payment is released</li>
+  </ol>
+
+  <section>
+    <h2>1. Scope a project with AI</h2>
+    <label for="brief">Client brief</label>
+    <textarea id="brief">I need a CAD model and 2D manufacturing drawings for a sheet-metal mounting bracket that holds a 12 V relay box. It needs four mounting holes and drawings ready for a laser-cutting shop.</textarea>
+    <div class="row">
+      <div><label for="budget">Total budget (USD)</label><input type="text" id="budget" value="100.00"></div>
+      <div><button class="btn" id="scopeBtn" type="button">Scope with AI</button></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="bar">
+      <h2>2. Milestones</h2>
+      <div class="seg" id="roles">
+        <button type="button" data-role="client" class="on">I'm the client</button>
+        <button type="button" data-role="freelancer">I'm the freelancer</button>
+      </div>
+    </div>
+    <p class="muted" id="roleNote"></p>
+    <div id="list"><p class="muted">Loading...</p></div>
+  </section>
+
+  <footer>
+    PayPal sandbox only, so no real money moves. To pay as the client, log in to PayPal with a sandbox
+    <strong>Personal</strong> account (use a private window).
+  </footer>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let role = "client", milestones = [], lastJson = "";
+const drafts = {}, reviews = {}, hist = {}, autoRelease = {};
+
+function el(tag, props = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) n.append(kid.nodeType ? kid : document.createTextNode(kid));
+  return n;
+}
+let toastTimer;
+function toast(msg, isErr) {
+  const t = $("#toast"); t.textContent = msg; t.className = isErr ? "err" : ""; t.style.display = "block";
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.style.display = "none"), 6500);
+}
+async function api(path, method = "GET", body) {
+  const r = await fetch(path, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  let data = null; try { data = await r.json(); } catch (e) {}
+  if (!r.ok) {
+    const d = data && data.detail;
+    throw new Error(typeof d === "string" ? d : d ? JSON.stringify(d) : "Request failed (" + r.status + ")");
+  }
+  return data;
+}
+function btn(label, fn, cls = "") {
+  const b = el("button", { class: "btn " + cls, type: "button" }, label);
+  b.addEventListener("click", async () => {
+    b.disabled = true; b.textContent = "Working...";
+    try { await fn(); } catch (e) { toast(e.message, true); }
+    await load(true);
+  });
+  return b;
+}
+const money = (m) => (m.currency === "USD" ? "$" : m.currency + " ") + m.amount;
+const approveLink = (m) => "https://www.sandbox.paypal.com/checkoutnow?token=" + encodeURIComponent(m.order_id);
+const act = (m, a, body) => api("/milestones/" + m.id + "/" + a, "POST", body);
+
+function reviewBox(r) {
+  const box = el("div", { class: "review " + r.verdict },
+    el("strong", {}, r.verdict === "pass" ? "AI review: passed" : "AI review: not met yet"),
+    el("div", { class: "muted" }, r.review.summary));
+  const ul = el("ul");
+  for (const c of r.review.checks) ul.append(el("li", {}, (c.met ? "Met: " : "Not met: ") + c.criterion + (c.evidence ? " (" + c.evidence + ")" : "")));
+  box.append(ul);
+  return box;
+}
+
+function card(m) {
+  const actions = [];
+  if (role === "client") {
+    if (m.status === "draft") actions.push(btn("Fund with PayPal", () => act(m, "fund")));
+    if (m.status === "awaiting_payment") {
+      actions.push(el("a", { class: "btn", href: approveLink(m), target: "_blank", rel: "noopener" }, "1. Approve in PayPal"));
+      actions.push(btn("2. I approved: hold the funds", () => act(m, "authorize")));
+    }
+    if (m.status === "submitted") {
+      actions.push(btn("Approve work", () => act(m, "approve", { note: "approved by client" })));
+      actions.push(btn("Send back", () => act(m, "reject", { note: "sent back by client" }), "ghost"));
+    }
+    if (m.status === "approved") actions.push(btn("Release payment", () => act(m, "release")));
+    if (["draft", "awaiting_payment", "funded", "submitted", "approved"].includes(m.status))
+      actions.push(btn("Cancel", () => act(m, "void", { note: "cancelled by client" }), "danger"));
+  } else if (m.status === "funded") {
+    const ta = el("textarea", { placeholder: "Describe the delivered work: what the drawing or model contains, dimensions, tolerances, views..." });
+    ta.value = drafts[m.id] || "";
+    ta.addEventListener("input", () => (drafts[m.id] = ta.value));
+    const cb = el("input", { type: "checkbox" });
+    cb.checked = autoRelease[m.id] !== false;
+    cb.addEventListener("change", () => (autoRelease[m.id] = cb.checked));
+    actions.push(el("div", { style: "width:100%" }, ta,
+      el("label", { style: "font-weight:400" }, cb, " Release payment automatically if the AI review passes")));
+    actions.push(btn("Submit for AI review", async () => {
+      if (!ta.value.trim()) throw new Error("Describe the delivered work first");
+      reviews[m.id] = await api("/milestones/" + m.id + "/review", "POST", { deliverable: ta.value, auto_release: cb.checked });
+      if (reviews[m.id].verdict === "pass") delete drafts[m.id];
+      toast(reviews[m.id].verdict === "pass" ? "AI review passed" : "AI review: not met yet", reviews[m.id].verdict !== "pass");
+    }));
+  }
+  actions.push(btn(hist[m.id] ? "Hide history" : "History", async () => {
+    if (hist[m.id]) delete hist[m.id]; else hist[m.id] = (await api("/milestones/" + m.id)).history;
+  }, "ghost"));
+
+  const node = el("div", { class: "ms" },
+    el("div", { class: "top" },
+      el("div", {}, el("span", { class: "title" }, m.title), el("span", { class: "badge s-" + m.status }, m.status.replace("_", " "))),
+      el("span", { class: "amt" }, money(m))),
+    m.criteria ? el("div", { class: "crit" }, "Acceptance criteria: " + m.criteria) : null,
+    m.capture_id ? el("div", { class: "crit" }, "PayPal capture: " + m.capture_id) : null,
+    reviews[m.id] && m.status !== "released" ? reviewBox(reviews[m.id]) : null,
+    reviews[m.id] && m.status === "released" ? reviewBox(reviews[m.id]) : null,
+    el("div", { class: "actions" }, actions));
+  if (hist[m.id]) {
+    const ul = el("ul", { class: "hist" });
+    for (const h of hist[m.id]) ul.append(el("li", {}, new Date(h.at * 1000).toLocaleTimeString() + "  " + (h.from_status || "start") + " to " + h.to_status + (h.note ? ": " + h.note : "")));
+    node.append(ul);
+  }
+  return node;
+}
+
+function render() {
+  $("#roleNote").textContent = role === "client"
+    ? "You are the client: fund milestones, approve the work and release payment."
+    : "You are the freelancer: once a milestone is funded, submit your work and the AI checks it against the spec.";
+  const list = $("#list"); list.replaceChildren();
+  if (!milestones.length) { list.append(el("p", { class: "muted" }, "No milestones yet. Scope a project above.")); return; }
+  const groups = {};
+  for (const m of milestones) (groups[m.project] = groups[m.project] || []).push(m);
+  const names = Object.keys(groups).sort((a, b) => Math.max(...groups[b].map((x) => x.created_at)) - Math.max(...groups[a].map((x) => x.created_at)));
+  for (const name of names) {
+    const ms = groups[name].sort((a, b) => a.created_at - b.created_at);
+    list.append(el("div", { class: "project" }, name));
+    ms.forEach((m) => list.append(card(m)));
+  }
+}
+
+async function load(force) {
+  try {
+    const data = await api("/milestones");
+    const s = JSON.stringify(data);
+    const typing = document.activeElement && ["TEXTAREA", "INPUT"].includes(document.activeElement.tagName) && document.activeElement.closest("#list");
+    if (!force && (s === lastJson || typing)) return;
+    lastJson = s; milestones = data; render();
+  } catch (e) { if (force) toast(e.message, true); }
+}
+
+$("#scopeBtn").addEventListener("click", async (ev) => {
+  const b = ev.currentTarget; b.disabled = true; b.textContent = "AI is scoping...";
+  try {
+    const res = await api("/ai/scope", "POST", { brief: $("#brief").value, total_budget: $("#budget").value.trim(), currency: "USD" });
+    toast("Created " + res.milestones.length + " milestones: " + res.plan.project_title);
+    await load(true);
+  } catch (e) { toast(e.message, true); }
+  b.disabled = false; b.textContent = "Scope with AI";
+});
+$("#roles").addEventListener("click", (ev) => {
+  const r = ev.target.dataset && ev.target.dataset.role; if (!r) return;
+  role = r; document.querySelectorAll("#roles button").forEach((b) => b.classList.toggle("on", b.dataset.role === r)); render();
+});
+
+load(true);
+setInterval(() => { if (!document.hidden) load(false); }, 5000);
+</script>
+</body>
+</html>
