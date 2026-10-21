@@ -158,3 +158,11 @@ def mark_event(event_id: str, event_type: str) -> bool:
         )
         conn.commit()
         return cur.rowcount == 1
+
+
+def reset() -> None:
+    """Demo helper: delete all milestones and their history (webhook event ids are kept)."""
+    with closing(_connect()) as conn:
+        conn.execute("DELETE FROM history")
+        conn.execute("DELETE FROM milestones")
+        conn.commit()

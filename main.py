@@ -1,13 +1,14 @@
 """SpecPay backend: milestone state machine on top of PayPal Orders v2 + webhooks."""
 import logging
 import os
+import secrets
 import time
 from decimal import Decimal, InvalidOperation
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 load_dotenv()
@@ -23,6 +24,7 @@ SECRET = os.environ["PAYPAL_SECRET"]
 WEBHOOK_ID = os.getenv("PAYPAL_WEBHOOK_ID")  # set after you create the webhook
 RETURN_URL = os.getenv("RETURN_URL", "http://localhost:8000/return")
 CANCEL_URL = os.getenv("CANCEL_URL", "http://localhost:8000/cancel")
+RESET_KEY = os.getenv("RESET_KEY")  # demo reset is disabled unless this is set
 
 app = FastAPI(title="SpecPay")
 db.init_db()
@@ -259,14 +261,47 @@ async def home():
     return FileResponse(path)
 
 
-@app.get("/return")
-async def return_page(token: str | None = None):
-    return {"message": "Approved. You can close this tab.", "order_id": token}
+_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>SpecPay</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;
+background:#0e1116;color:#e8ebf0}main{max-width:420px;padding:24px;text-align:center}
+a{display:inline-block;margin-top:14px;background:#5b9bff;color:#fff;padding:10px 18px;border-radius:8px;
+text-decoration:none}</style></head><body><main><h1>@@T@@</h1><p>@@B@@</p>
+<a href="/">Back to SpecPay</a></main></body></html>"""
 
 
-@app.get("/cancel")
+def _page(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(_PAGE.replace("@@T@@", title).replace("@@B@@", body))
+
+
+@app.get("/return", include_in_schema=False)
+async def return_page():
+    return _page("Payment approved",
+                 "PayPal has your approval. Go back to SpecPay and click "
+                 "&quot;I approved: hold the funds&quot; to place the hold.")
+
+
+@app.get("/cancel", include_in_schema=False)
 async def cancel_page():
-    return {"message": "Payment cancelled."}
+    return _page("Payment cancelled", "Nothing was charged. You can fund the milestone again whenever you are ready.")
+
+
+@app.post("/demo/reset", include_in_schema=False)
+async def demo_reset(request: Request):
+    """Demo helper: void open PayPal holds, then wipe all milestones. Needs the RESET_KEY header."""
+    sent = request.headers.get("x-reset-key", "")
+    if not RESET_KEY or not secrets.compare_digest(sent, RESET_KEY):
+        raise HTTPException(403, "Reset is disabled or the key is wrong")
+    voided = 0
+    for m in db.list_milestones():
+        if m["auth_id"] and m["status"] in ("funded", "submitted", "approved"):
+            try:
+                await paypal("POST", f"/v2/payments/authorizations/{m['auth_id']}/void")
+                voided += 1
+            except HTTPException as exc:
+                log.warning("Could not void hold for %s during reset: %s", m["id"], exc.detail)
+    db.reset()
+    return {"reset": True, "holds_voided": voided}
 
 
 # ---------------------------------------------------------------- webhooks

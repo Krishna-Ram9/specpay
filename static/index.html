@@ -47,6 +47,19 @@ textarea{min-height:92px;resize:vertical}
 .hist{font-size:13px;color:var(--muted);margin:8px 0 0;padding-left:18px}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);max-width:90%;padding:10px 16px;border-radius:8px;background:#222;color:#fff;font-size:14px;display:none;z-index:9}
 #toast.err{background:var(--bad)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+.stat b{display:block;font-size:24px;font-variant-numeric:tabular-nums}.stat span{color:var(--muted);font-size:13px}
+.stat.held b{color:var(--warn)}.stat.rel b{color:var(--ok)}
+.j{display:flex;gap:6px;margin:10px 0 4px}
+.step{flex:1;font-size:11px;color:var(--muted)}
+.step i{display:block;height:5px;border-radius:3px;background:var(--line);margin-bottom:4px}
+.step.done{color:var(--text)}.step.done i{background:var(--ok)}.step.cur i{background:var(--accent)}
+.checks{list-style:none;padding:0!important;margin:8px 0 0}.checks li{margin:6px 0}
+.checks em{display:block;color:var(--muted);font-style:normal;font-size:13px}
+.y{color:var(--ok);font-weight:700}.n{color:var(--bad);font-weight:700}
+.miss{color:var(--bad);margin-top:6px}
+@media(max-width:600px){.stats{grid-template-columns:1fr}.step{font-size:10px}}
 footer{color:var(--muted);font-size:13px}
 </style>
 </head>
@@ -58,6 +71,11 @@ footer{color:var(--muted);font-size:13px}
     <li>1. AI scopes the brief</li><li>2. Client funds a milestone (PayPal)</li>
     <li>3. Freelancer submits work</li><li>4. AI checks it against the spec</li><li>5. Payment is released</li>
   </ol>
+  <div class="stats">
+    <div class="stat"><b id="sPend">$0.00</b><span>Not yet funded</span></div>
+    <div class="stat held"><b id="sHeld">$0.00</b><span>Held by PayPal</span></div>
+    <div class="stat rel"><b id="sRel">$0.00</b><span>Released to freelancer</span></div>
+  </div>
 
   <section>
     <h2>1. Scope a project with AI</h2>
@@ -78,13 +96,14 @@ footer{color:var(--muted);font-size:13px}
       </div>
     </div>
     <p class="muted" id="roleNote"></p>
-    <div id="list"><p class="muted">Loading...</p></div>
+    <div id="list"><p class="muted">Waking up the server. The free plan can take up to a minute on the first load...</p></div>
   </section>
 
   <footer>
     PayPal sandbox only, so no real money moves. To pay as the client, log in to PayPal with a sandbox
     <strong>Personal</strong> account (use a private window).
   </footer>
+  <p id="demoBar" hidden><button class="btn danger" id="resetBtn" type="button">Reset demo (clears all milestones)</button></p>
 </main>
 <div id="toast"></div>
 
@@ -134,9 +153,10 @@ function reviewBox(r) {
   const box = el("div", { class: "review " + r.verdict },
     el("strong", {}, r.verdict === "pass" ? "AI review: passed" : "AI review: not met yet"),
     el("div", { class: "muted" }, r.review.summary));
-  const ul = el("ul");
-  for (const c of r.review.checks) ul.append(el("li", {}, (c.met ? "Met: " : "Not met: ") + c.criterion + (c.evidence ? " (" + c.evidence + ")" : "")));
+  const ul = el("ul", { class: "checks" });
+  for (const c of r.review.checks) ul.append(el("li", {}, el("span", { class: c.met ? "y" : "n" }, c.met ? "\u2713 " : "\u2717 "), c.criterion, c.evidence ? el("em", {}, c.evidence) : null));
   box.append(ul);
+  if (r.review.missing && r.review.missing.length) box.append(el("div", { class: "miss" }, "Missing: " + r.review.missing.join("; ")));
   return box;
 }
 
@@ -181,6 +201,7 @@ function card(m) {
       el("span", { class: "amt" }, money(m))),
     m.criteria ? el("div", { class: "crit" }, "Acceptance criteria: " + m.criteria) : null,
     m.capture_id ? el("div", { class: "crit" }, "PayPal capture: " + m.capture_id) : null,
+    journey(m),
     reviews[m.id] && m.status !== "released" ? reviewBox(reviews[m.id]) : null,
     reviews[m.id] && m.status === "released" ? reviewBox(reviews[m.id]) : null,
     el("div", { class: "actions" }, actions));
@@ -192,7 +213,28 @@ function card(m) {
   return node;
 }
 
+const STEPS = ["Scoped", "Funded", "Delivered", "Verified", "Released"];
+const DONE = { draft: 0, awaiting_payment: 0, funded: 1, submitted: 2, approved: 3, released: 4 };
+function journey(m) {
+  if (m.status === "voided") return el("div", { class: "crit" }, "Cancelled");
+  const d = DONE[m.status] ?? 0;
+  return el("div", { class: "j" }, STEPS.map((s, i) => el("div", { class: "step" + (i <= d ? " done" : i === d + 1 ? " cur" : "") }, el("i"), s)));
+}
+function totals() {
+  let p = 0, h = 0, r = 0;
+  for (const m of milestones) {
+    const a = parseFloat(m.amount) || 0;
+    if (m.status === "released") r += a;
+    else if (["funded", "submitted", "approved"].includes(m.status)) h += a;
+    else if (["draft", "awaiting_payment"].includes(m.status)) p += a;
+  }
+  $("#sPend").textContent = "$" + p.toFixed(2);
+  $("#sHeld").textContent = "$" + h.toFixed(2);
+  $("#sRel").textContent = "$" + r.toFixed(2);
+}
+
 function render() {
+  totals();
   $("#roleNote").textContent = role === "client"
     ? "You are the client: fund milestones, approve the work and release payment."
     : "You are the freelancer: once a milestone is funded, submit your work and the AI checks it against the spec.";
@@ -233,6 +275,21 @@ $("#roles").addEventListener("click", (ev) => {
 });
 
 load(true);
+if (new URLSearchParams(location.search).has("demo")) {
+  $("#demoBar").hidden = false;
+  $("#resetBtn").addEventListener("click", async () => {
+    if (!confirm("Delete all milestones and release any PayPal holds?")) return;
+    const key = sessionStorage.getItem("rk") || prompt("Reset key:");
+    if (!key) return;
+    try {
+      const r = await fetch("/demo/reset", { method: "POST", headers: { "X-Reset-Key": key } });
+      if (!r.ok) { sessionStorage.removeItem("rk"); throw new Error("Reset failed: wrong key, or RESET_KEY is not set on the server"); }
+      sessionStorage.setItem("rk", key);
+      for (const o of [drafts, reviews, hist]) for (const k in o) delete o[k];
+      toast("Demo reset"); await load(true);
+    } catch (e) { toast(e.message, true); }
+  });
+}
 setInterval(() => { if (!document.hidden) load(false); }, 5000);
 </script>
 </body>
