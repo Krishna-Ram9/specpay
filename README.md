@@ -83,6 +83,7 @@ Webhook events are handled at `POST /webhooks/paypal` (idempotent, duplicates ar
 | PayPal developer platform (sandbox) | Orders v2, Payments v2, Webhooks (see table above) |
 | Groq (`openai/gpt-oss-120b`) | Scoping briefs into milestones and reviewing deliverables |
 | Render | Hosts the app and receives PayPal webhooks (auto-deploys from `main`) |
+| AG Grid Community | Milestone dashboard: a sortable, filterable table of every milestone with live status, updated as PayPal webhooks arrive |
 | Postman | Collection of the sandbox calls in `postman/`, used to prove the payment loop before writing code |
 | FastAPI, SQLite, httpx | Backend, storage and HTTP client |
 

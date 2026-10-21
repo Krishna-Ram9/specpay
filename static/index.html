@@ -62,6 +62,7 @@ textarea{min-height:92px;resize:vertical}
 @media(max-width:600px){.stats{grid-template-columns:1fr}.step{font-size:10px}}
 footer{color:var(--muted);font-size:13px}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@33.3.2/dist/ag-grid-community.min.js"></script>
 </head>
 <body>
 <main>
@@ -97,6 +98,13 @@ footer{color:var(--muted);font-size:13px}
     </div>
     <p class="muted" id="roleNote"></p>
     <div id="list"><p class="muted">Waking up the server. The free plan can take up to a minute on the first load...</p></div>
+  </section>
+
+  <section>
+    <h2>3. Milestone dashboard</h2>
+    <p class="muted">All milestones in one sortable, filterable table (built with AG Grid). It updates live as PayPal webhooks arrive.</p>
+    <input type="text" id="gridSearch" placeholder="Filter by project, milestone or status..." style="margin-bottom:12px">
+    <div id="grid"></div>
   </section>
 
   <footer>
@@ -213,6 +221,35 @@ function card(m) {
   return node;
 }
 
+let gridApi = null;
+function updateGrid() {
+  if (!window.agGrid) return;  // CDN blocked: the cards still work
+  if (!gridApi) {
+    const dark = matchMedia("(prefers-color-scheme: dark)");
+    const setMode = () => (document.body.dataset.agThemeMode = dark.matches ? "dark" : "light");
+    setMode(); dark.addEventListener("change", setMode);
+    gridApi = agGrid.createGrid($("#grid"), {
+      theme: agGrid.themeQuartz.withPart(agGrid.colorSchemeVariable),
+      domLayout: "autoHeight",
+      defaultColDef: { sortable: true, filter: true, resizable: true },
+      columnDefs: [
+        { field: "project", headerName: "Project", flex: 1.4, minWidth: 140 },
+        { field: "title", headerName: "Milestone", flex: 1.6, minWidth: 150 },
+        { colId: "amount", headerName: "Amount", width: 110, type: "rightAligned", filter: "agNumberColumnFilter",
+          valueGetter: (p) => parseFloat(p.data.amount) || 0, valueFormatter: (p) => "$" + p.value.toFixed(2) },
+        { field: "status", headerName: "Status", width: 160,
+          cellRenderer: (p) => el("span", { class: "badge s-" + p.value, style: "margin:0" }, String(p.value).replace("_", " ")) },
+        { field: "updated_at", headerName: "Updated", width: 140, sort: "desc",
+          valueFormatter: (p) => new Date(p.value * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) },
+        { field: "capture_id", headerName: "PayPal capture", flex: 1, minWidth: 130 },
+      ],
+      rowData: [],
+    });
+    $("#gridSearch").addEventListener("input", (e) => gridApi.setGridOption("quickFilterText", e.target.value));
+  }
+  gridApi.setGridOption("rowData", milestones);
+}
+
 const STEPS = ["Scoped", "Funded", "Delivered", "Verified", "Released"];
 const DONE = { draft: 0, awaiting_payment: 0, funded: 1, submitted: 2, approved: 3, released: 4 };
 function journey(m) {
@@ -231,6 +268,7 @@ function totals() {
   $("#sPend").textContent = "$" + p.toFixed(2);
   $("#sHeld").textContent = "$" + h.toFixed(2);
   $("#sRel").textContent = "$" + r.toFixed(2);
+  updateGrid();
 }
 
 function render() {
