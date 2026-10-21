@@ -2,6 +2,7 @@
 import logging
 import os
 import time
+from decimal import Decimal, InvalidOperation
 
 import httpx
 from dotenv import load_dotenv
@@ -9,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 load_dotenv()
+import ai  # noqa: E402
 import db  # imported after load_dotenv so SPECPAY_DB from .env is honoured  # noqa: E402
 
 log = logging.getLogger("specpay")
@@ -155,13 +157,17 @@ async def approve(mid: str, body: Note = Note()):
     return db.transition(mid, "approved", note=body.note or "review passed")
 
 
-@app.post("/milestones/{mid}/release")
-async def release(mid: str):
+async def _release(mid: str) -> dict:
     """Capture the held funds. Only allowed once the milestone is approved."""
     m = get_or_404(mid)
     require_status(m, "approved")
     res = await paypal("POST", f"/v2/payments/authorizations/{m['auth_id']}/capture")
     return db.transition(mid, "released", note="payment captured", capture_id=res["id"])
+
+
+@app.post("/milestones/{mid}/release")
+async def release(mid: str):
+    return await _release(mid)
 
 
 @app.post("/milestones/{mid}/void")
@@ -172,6 +178,64 @@ async def void(mid: str, body: Note = Note()):
     if m["auth_id"]:
         await paypal("POST", f"/v2/payments/authorizations/{m['auth_id']}/void")
     return db.transition(mid, "voided", note=body.note or "voided")
+
+
+# ---------------------------------------------------------------- AI endpoints
+class ScopeRequest(BaseModel):
+    brief: str                   # the client's project description
+    total_budget: str            # e.g. "200.00"
+    currency: str = "USD"
+    project: str | None = None   # defaults to the AI's suggested project title
+    save: bool = True            # create the proposed milestones as drafts
+
+
+class ReviewRequest(BaseModel):
+    deliverable: str             # text description / extract of the delivered work
+    auto_release: bool = False   # capture the payment immediately if the review passes
+
+
+@app.post("/ai/scope")
+async def ai_scope(body: ScopeRequest):
+    """Turn a client brief into milestones with amounts and acceptance criteria."""
+    try:
+        if Decimal(body.total_budget) <= 0:
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        raise HTTPException(400, "total_budget must be a positive number like '200.00'")
+    try:
+        plan = await ai.scope_brief(body.brief, body.total_budget, body.currency)
+    except ai.AIError as exc:
+        raise HTTPException(502, str(exc))
+    saved = []
+    if body.save:
+        project = body.project or plan["project_title"]
+        for item in plan["milestones"]:
+            saved.append(db.create_milestone(project, item["title"], item["amount"], body.currency, item["criteria"]))
+    return {"plan": plan, "milestones": saved}
+
+
+@app.post("/milestones/{mid}/review")
+async def ai_review(mid: str, body: ReviewRequest):
+    """AI checks the deliverable against the criteria. Pass -> approved; fail -> back to funded."""
+    m = get_or_404(mid)
+    require_status(m, "funded", "submitted")
+    if not m["criteria"]:
+        raise HTTPException(400, "This milestone has no acceptance criteria to review against")
+    try:
+        result = await ai.review_deliverable(m["title"], m["criteria"], body.deliverable)
+    except ai.AIError as exc:
+        raise HTTPException(502, str(exc))
+
+    if m["status"] == "funded":
+        db.transition(mid, "submitted", note="deliverable submitted for AI review")
+    if result["verdict"] == "pass":
+        db.transition(mid, "approved", note=f"AI review passed: {result['summary'][:300]}")
+        if body.auto_release:
+            await _release(mid)
+    else:
+        reasons = "; ".join(result["missing"]) or result["summary"]
+        db.transition(mid, "funded", note=f"AI review failed: {reasons[:300]}")
+    return {"verdict": result["verdict"], "review": result, "milestone": db.get(mid)}
 
 
 @app.get("/return")
