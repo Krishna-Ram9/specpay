@@ -239,10 +239,24 @@ async def ai_review(mid: str, body: ReviewRequest):
     return {"verdict": result["verdict"], "review": result, "milestone": db.get(mid)}
 
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _find_index() -> str | None:
+    """index.html normally lives in static/, but accept the repo root too."""
+    for path in (os.path.join(BASE_DIR, "static", "index.html"), os.path.join(BASE_DIR, "index.html")):
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 @app.get("/", include_in_schema=False)
 async def home():
     """The single-page demo UI."""
-    return FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html"))
+    path = _find_index()
+    if not path:
+        raise HTTPException(404, "index.html was not found on the server (expected static/index.html)")
+    return FileResponse(path)
 
 
 @app.get("/return")
