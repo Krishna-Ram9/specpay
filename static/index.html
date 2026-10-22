@@ -234,15 +234,15 @@ function updateGrid() {
       domLayout: "autoHeight",
       defaultColDef: { sortable: true, filter: true, resizable: true },
       columnDefs: [
-        { field: "project", headerName: "Project", flex: 1.4, minWidth: 140 },
-        { field: "title", headerName: "Milestone", flex: 1.6, minWidth: 150 },
+        { field: "project", headerName: "Project", flex: 1.4, minWidth: 140, wrapText: true, autoHeight: true },
+        { field: "title", headerName: "Milestone", flex: 1.6, minWidth: 150, wrapText: true, autoHeight: true },
         { colId: "amount", headerName: "Amount", width: 110, type: "rightAligned", filter: "agNumberColumnFilter",
           valueGetter: (p) => parseFloat(p.data.amount) || 0, valueFormatter: (p) => "$" + p.value.toFixed(2) },
         { field: "status", headerName: "Status", width: 160,
           cellRenderer: (p) => el("span", { class: "badge s-" + p.value, style: "margin:0" }, String(p.value).replace("_", " ")) },
         { field: "updated_at", headerName: "Updated", width: 140, sort: "desc",
           valueFormatter: (p) => new Date(p.value * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) },
-        { field: "capture_id", headerName: "PayPal capture", flex: 1, minWidth: 130 },
+        { field: "capture_id", headerName: "PayPal capture", flex: 1, minWidth: 190 },
       ],
       rowData: [],
     });
