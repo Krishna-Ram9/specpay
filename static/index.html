@@ -170,6 +170,7 @@ function reviewBox(r) {
 
 function card(m) {
   const actions = [];
+  const rv = reviews[m.id] || (m.last_review ? { verdict: m.last_review.verdict, review: m.last_review } : null);
   if (role === "client") {
     if (m.status === "draft") actions.push(btn("Fund with PayPal", () => act(m, "fund")));
     if (m.status === "awaiting_payment") {
@@ -210,8 +211,8 @@ function card(m) {
     m.criteria ? el("div", { class: "crit" }, "Acceptance criteria: " + m.criteria) : null,
     m.capture_id ? el("div", { class: "crit" }, "PayPal capture: " + m.capture_id) : null,
     journey(m),
-    reviews[m.id] && m.status !== "released" ? reviewBox(reviews[m.id]) : null,
-    reviews[m.id] && m.status === "released" ? reviewBox(reviews[m.id]) : null,
+    rv ? reviewBox(rv) : null,
+    null,
     el("div", { class: "actions" }, actions));
   if (hist[m.id]) {
     const ul = el("ul", { class: "hist" });

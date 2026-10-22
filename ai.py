@@ -3,7 +3,9 @@
 Provider is chosen with AI_PROVIDER: "groq" (default, free tier), "gemini" (free tier) or "anthropic".
 Both are called directly over httpx (already a dependency), so there is no extra SDK.
 """
+import asyncio
 import json
+import logging
 import os
 import re
 from decimal import Decimal, InvalidOperation
@@ -18,6 +20,9 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"  # override with GROQ_MODEL; run test_groq.py to list models
 MAX_DELIVERABLE_CHARS = 20000
 TIMEOUT = float(os.getenv("AI_TIMEOUT", "120"))  # seconds
+
+
+log = logging.getLogger("specpay.ai")
 
 
 class AIError(Exception):
@@ -177,9 +182,8 @@ async def _ask_gemini(system: str, user: str, max_tokens: int) -> str:
     return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
 
-async def _ask(system: str, user: str, max_tokens: int = 1500) -> dict:
-    """Call the configured provider (AI_PROVIDER = groq | gemini | anthropic) and return parsed JSON."""
-    provider = os.getenv("AI_PROVIDER", "groq").strip().lower()
+async def _ask_once(provider: str, system: str, user: str, max_tokens: int) -> dict:
+    """Call one provider (groq | gemini | anthropic) and return parsed JSON."""
     try:
         if provider == "groq":
             text = await _ask_groq(system, user, max_tokens)
@@ -194,6 +198,26 @@ async def _ask(system: str, user: str, max_tokens: int = 1500) -> dict:
     except (ValueError, KeyError, TypeError) as exc:  # unexpected response shape
         raise AIError(f"Unexpected response from the AI service: {type(exc).__name__}: {exc}") from exc
     return parse_json(text)
+
+
+async def _ask(system: str, user: str, max_tokens: int = 1500) -> dict:
+    """Try AI_PROVIDER twice, then the optional AI_FALLBACK_PROVIDER (also twice)."""
+    primary = os.getenv("AI_PROVIDER", "groq").strip().lower()
+    fallback = os.getenv("AI_FALLBACK_PROVIDER", "").strip().lower()
+    providers = [primary] + ([fallback] if fallback and fallback != primary else [])
+    last = AIError("No AI provider is configured")
+    for provider in providers:
+        for attempt in range(2):
+            try:
+                return await _ask_once(provider, system, user, max_tokens)
+            except AIError as exc:
+                last = exc
+                log.warning("AI call via %s failed (attempt %d): %s", provider, attempt + 1, exc)
+                if "not set" in str(exc) or "Unknown AI_PROVIDER" in str(exc):
+                    break  # a configuration problem will not fix itself on retry
+                if attempt == 0:
+                    await asyncio.sleep(1.5)
+    raise last
 
 
 def normalize_scope(data: dict, total_budget: str) -> dict:

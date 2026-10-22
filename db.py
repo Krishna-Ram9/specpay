@@ -1,4 +1,5 @@
 """SQLite persistence + milestone state machine for SpecPay (stdlib only)."""
+import json
 import os
 import sqlite3
 import time
@@ -40,6 +41,15 @@ CREATE TABLE IF NOT EXISTS history (
   from_status TEXT,
   to_status TEXT NOT NULL,
   note TEXT,
+  at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  milestone_id TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  summary TEXT,
+  checks TEXT,
+  missing TEXT,
   at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS webhook_events (
@@ -163,6 +173,41 @@ def mark_event(event_id: str, event_type: str) -> bool:
 def reset() -> None:
     """Demo helper: delete all milestones and their history (webhook event ids are kept)."""
     with closing(_connect()) as conn:
+        conn.execute("DELETE FROM reviews")
         conn.execute("DELETE FROM history")
         conn.execute("DELETE FROM milestones")
         conn.commit()
+
+
+def add_review(mid: str, review: dict) -> None:
+    """Store the full AI review (verdict, summary, per-criterion evidence) as an audit record."""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT INTO reviews (milestone_id, verdict, summary, checks, missing, at) VALUES (?, ?, ?, ?, ?, ?)",
+            (mid, review["verdict"], review.get("summary", ""),
+             json.dumps(review.get("checks", [])), json.dumps(review.get("missing", [])), time.time()),
+        )
+        conn.commit()
+
+
+def _review_row(row) -> dict:
+    d = dict(row)
+    d["checks"] = json.loads(d["checks"] or "[]")
+    d["missing"] = json.loads(d["missing"] or "[]")
+    return d
+
+
+def latest_reviews() -> dict:
+    """Most recent AI review for each milestone, keyed by milestone id."""
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT r.* FROM reviews r JOIN (SELECT milestone_id, MAX(id) AS mx FROM reviews GROUP BY milestone_id) x"
+            " ON r.id = x.mx"
+        ).fetchall()
+    return {r["milestone_id"]: _review_row(r) for r in rows}
+
+
+def review_history(mid: str) -> list:
+    with closing(_connect()) as conn:
+        rows = conn.execute("SELECT * FROM reviews WHERE milestone_id = ? ORDER BY id", (mid,)).fetchall()
+    return [_review_row(r) for r in rows]

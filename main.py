@@ -73,6 +73,50 @@ def require_status(m: dict, *allowed: str) -> None:
         )
 
 
+MAX_AMOUNT = Decimal("10000.00")
+AI_LIMIT, AI_WINDOW = 20, 600  # AI calls allowed per visitor per 10 minutes
+_ai_hits: dict[str, list[float]] = {}
+
+
+def _amount(value: str) -> str:
+    """Validate a money amount and return it as a two-decimal string like '50.00'."""
+    try:
+        d = Decimal(str(value).strip()).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        raise HTTPException(400, "Amount must be a number like '50.00'")
+    if d <= 0 or d > MAX_AMOUNT:
+        raise HTTPException(400, f"Amount must be between 0.01 and {MAX_AMOUNT}")
+    return f"{d:.2f}"
+
+
+def _text(value: str | None, label: str, limit: int, required: bool = True) -> str | None:
+    value = (value or "").strip()
+    if required and not value:
+        raise HTTPException(400, f"{label} is required")
+    if len(value) > limit:
+        raise HTTPException(400, f"{label} is too long (max {limit} characters)")
+    return value or None
+
+
+def _rate_limit(request: Request) -> None:
+    """Keep one visitor from burning the free AI quota. The last X-Forwarded-For entry is added by Render's proxy."""
+    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?")).split(",")[-1].strip()
+    now = time.time()
+    recent = [t for t in _ai_hits.get(ip, []) if now - t < AI_WINDOW]
+    if len(recent) >= AI_LIMIT:
+        raise HTTPException(429, "That is a lot of AI requests in a short time. Please wait a few minutes and try again.")
+    recent.append(now)
+    _ai_hits[ip] = recent
+    if len(_ai_hits) > 1000:
+        for k in [k for k, v in _ai_hits.items() if not any(now - t < AI_WINDOW for t in v)]:
+            del _ai_hits[k]
+
+
+def _ai_unavailable(exc: Exception) -> HTTPException:
+    log.warning("AI request failed: %s", exc)
+    return HTTPException(503, "The AI service is busy or unreachable right now. Please try again in a moment.")
+
+
 # ---------------------------------------------------------------- models
 class MilestoneCreate(BaseModel):
     project: str
@@ -89,18 +133,25 @@ class Note(BaseModel):
 # ---------------------------------------------------------------- milestone endpoints
 @app.post("/milestones")
 async def create_milestone(body: MilestoneCreate):
-    return db.create_milestone(body.project, body.title, body.amount, body.currency, body.criteria)
+    currency = body.currency.strip().upper()
+    if len(currency) != 3 or not currency.isalpha():
+        raise HTTPException(400, "Currency must be a 3-letter code like USD")
+    return db.create_milestone(
+        _text(body.project, "Project", 200), _text(body.title, "Title", 200),
+        _amount(body.amount), currency, _text(body.criteria, "Criteria", 2000, required=False),
+    )
 
 
 @app.get("/milestones")
 async def list_milestones(project: str | None = None):
-    return db.list_milestones(project)
+    last = db.latest_reviews()
+    return [{**m, "last_review": last.get(m["id"])} for m in db.list_milestones(project)]
 
 
 @app.get("/milestones/{mid}")
 async def read_milestone(mid: str):
     m = get_or_404(mid)
-    return {**m, "history": db.history(mid)}
+    return {**m, "history": db.history(mid), "reviews": db.review_history(mid)}
 
 
 @app.post("/milestones/{mid}/fund")
@@ -198,17 +249,24 @@ class ReviewRequest(BaseModel):
 
 
 @app.post("/ai/scope")
-async def ai_scope(body: ScopeRequest):
+async def ai_scope(body: ScopeRequest, request: Request):
     """Turn a client brief into milestones with amounts and acceptance criteria."""
+    _rate_limit(request)
     try:
         if Decimal(body.total_budget) <= 0:
             raise ValueError
     except (InvalidOperation, ValueError):
         raise HTTPException(400, "total_budget must be a positive number like '200.00'")
+    if Decimal(body.total_budget) > MAX_AMOUNT:
+        raise HTTPException(400, f"total_budget can be at most {MAX_AMOUNT} in this demo")
+    if not body.brief.strip():
+        raise HTTPException(400, "Write a project brief first")
+    if len(body.brief) > 5000:
+        raise HTTPException(400, "The brief is too long (max 5000 characters)")
     try:
         plan = await ai.scope_brief(body.brief, body.total_budget, body.currency)
     except ai.AIError as exc:
-        raise HTTPException(502, str(exc))
+        raise _ai_unavailable(exc)
     saved = []
     if body.save:
         project = body.project or plan["project_title"]
@@ -218,16 +276,22 @@ async def ai_scope(body: ScopeRequest):
 
 
 @app.post("/milestones/{mid}/review")
-async def ai_review(mid: str, body: ReviewRequest):
+async def ai_review(mid: str, body: ReviewRequest, request: Request):
     """AI checks the deliverable against the criteria. Pass -> approved; fail -> back to funded."""
     m = get_or_404(mid)
     require_status(m, "funded", "submitted")
+    _rate_limit(request)
+    if not body.deliverable.strip():
+        raise HTTPException(400, "Describe the delivered work first")
+    if len(body.deliverable) > 20000:
+        raise HTTPException(400, "The description is too long (max 20000 characters)")
     if not m["criteria"]:
         raise HTTPException(400, "This milestone has no acceptance criteria to review against")
     try:
         result = await ai.review_deliverable(m["title"], m["criteria"], body.deliverable)
     except ai.AIError as exc:
-        raise HTTPException(502, str(exc))
+        raise _ai_unavailable(exc)
+    db.add_review(mid, result)  # permanent audit record of the decision and its evidence
 
     if m["status"] == "funded":
         db.transition(mid, "submitted", note="deliverable submitted for AI review")
