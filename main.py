@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 load_dotenv()
 import ai  # noqa: E402
-import dxf_tools  # noqa: E402
+import file_tools  # noqa: E402
 import db  # imported after load_dotenv so SPECPAY_DB from .env is honoured  # noqa: E402
 
 log = logging.getLogger("specpay")
@@ -244,11 +244,15 @@ class ScopeRequest(BaseModel):
     save: bool = True            # create the proposed milestones as drafts
 
 
+class FileIn(BaseModel):
+    name: str
+    data: str  # base64 file content
+
+
 class ReviewRequest(BaseModel):
     deliverable: str             # text description / extract of the delivered work
     auto_release: bool = False   # capture the payment immediately if the review passes
-    dxf: str | None = None       # optional ASCII DXF (flat pattern) text; measured by the server
-    dxf_name: str = ""
+    files: list[FileIn] | None = None  # optional attachments (analysed by the server, never executed)
 
 
 @app.post("/ai/scope")
@@ -290,18 +294,18 @@ async def ai_review(mid: str, body: ReviewRequest, request: Request):
         raise HTTPException(400, "The description is too long (max 20000 characters)")
     if not m["criteria"]:
         raise HTTPException(400, "This milestone has no acceptance criteria to review against")
-    facts = None
-    if body.dxf:
+    facts, trusted, excerpts = [], "", ""
+    if body.files:
         try:
-            facts = dxf_tools.analyze(body.dxf, body.dxf_name)
-        except dxf_tools.DXFError as exc:
+            facts, trusted, excerpts = file_tools.analyze_all([(f.name, f.data) for f in body.files])
+        except file_tools.FileError as exc:
             raise HTTPException(400, str(exc))
     try:
         result = await ai.review_deliverable(m["title"], m["criteria"], body.deliverable,
-                                             dxf_tools.describe(facts) if facts else None)
+                                             trusted or None, excerpts or None)
     except ai.AIError as exc:
         raise _ai_unavailable(exc)
-    result["file_facts"] = facts
+    result["file_facts"] = facts or None
     db.add_review(mid, result)  # permanent audit record of the decision and its evidence
 
     if m["status"] == "funded":

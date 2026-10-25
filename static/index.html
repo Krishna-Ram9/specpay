@@ -120,7 +120,7 @@ Specification: 5052-H32 aluminium, 1.5 mm thick. The flat pattern must be 100 mm
 <script>
 const $ = (s) => document.querySelector(s);
 let role = "client", milestones = [], lastJson = "";
-const drafts = {}, reviews = {}, hist = {}, autoRelease = {};
+const drafts = {}, reviews = {}, hist = {}, autoRelease = {}, attach = {};
 
 function el(tag, props = {}, ...kids) {
   const n = document.createElement(tag);
@@ -167,8 +167,8 @@ function reviewBox(r) {
   for (const c of r.review.checks) ul.append(el("li", {}, el("span", { class: c.met ? "y" : "n" }, c.met ? "\u2713 " : "\u2717 "), c.criterion, c.evidence ? el("em", {}, c.evidence) : null));
   box.append(ul);
   if (r.review.missing && r.review.missing.length) box.append(el("div", { class: "miss" }, "Missing: " + r.review.missing.join("; ")));
-  const ff = r.review.file_facts;
-  box.append(el("div", { class: "muted", style: "font-size:13px;margin-top:6px" }, ff ? "Measured from uploaded DXF (" + ff.file_name + "): " + ff.width + " x " + ff.height + " " + ff.units + "; " + ff.hole_summary : "No DXF attached: judged from the written description only."));
+  const ff = [].concat(r.review.file_facts || []);
+  box.append(el("div", { class: "muted", style: "font-size:13px;margin-top:6px" }, ff.length ? ff.map((f) => "Analysed " + f.file_name + ": " + (f.summary || f.width + " x " + f.height + " mm; " + f.hole_summary)).join(" | ") : "No files attached: judged from the written description only."));
   return box;
 }
 
@@ -192,20 +192,34 @@ function card(m) {
     const ta = el("textarea", { placeholder: "Describe the delivered work: what the drawing or model contains, dimensions, tolerances, views..." });
     ta.value = drafts[m.id] || "";
     ta.addEventListener("input", () => (drafts[m.id] = ta.value));
-    const fi = el("input", { type: "file", accept: ".dxf" });
+    const fi = el("input", { type: "file", multiple: true, accept: ".dxf,.step,.stp,.py,.zip,.pdf,.csv,.md,.txt,.json" });
+    const list = el("div", { class: "muted", style: "font-size:13px;margin:4px 0" });
+    const drawList = () => {
+      list.replaceChildren(...(attach[m.id] || []).map((f, i) => el("div", {}, "Attached: " + f.name + " (" + Math.max(1, Math.round(f.size / 1024)) + " KB) ",
+        el("a", { href: "#", onclick: (e) => { e.preventDefault(); attach[m.id].splice(i, 1); drawList(); } }, "remove"))));
+    };
+    fi.addEventListener("change", () => { attach[m.id] = (attach[m.id] || []).concat([...fi.files]); fi.value = ""; drawList(); });
+    drawList();
     const cb = el("input", { type: "checkbox" });
     cb.checked = autoRelease[m.id] !== false;
     cb.addEventListener("change", () => (autoRelease[m.id] = cb.checked));
     actions.push(el("div", { style: "width:100%" }, ta,
-      el("label", { style: "font-weight:400" }, "Optional: attach the flat-pattern DXF (ASCII, max 2 MB). The server measures it: ", fi),
+      el("label", { style: "font-weight:400" }, "Optional: add files one at a time (.dxf .step .py .zip .pdf .csv .md .txt .json; up to 5, 2 MB each). The server analyses them and never runs code: ", fi),
+      list,
       el("label", { style: "font-weight:400" }, cb, " Release payment automatically if the AI review passes")));
     actions.push(btn("Submit for AI review", async () => {
       if (!ta.value.trim()) throw new Error("Describe the delivered work first");
-      const f = fi.files[0];
-      if (f && f.size > 2000000) throw new Error("The DXF file is larger than 2 MB");
-      const dxf = f ? await f.text() : null;
-      reviews[m.id] = await api("/milestones/" + m.id + "/review", "POST", { deliverable: ta.value, auto_release: cb.checked, dxf, dxf_name: f ? f.name : "" });
-      if (reviews[m.id].verdict === "pass") delete drafts[m.id];
+      const picked = attach[m.id] || [];
+      if (picked.length > 5) throw new Error("Attach at most 5 files");
+      const files = await Promise.all(picked.map(async (f) => {
+        if (f.size > 2000000) throw new Error(f.name + " is larger than 2 MB");
+        const buf = new Uint8Array(await f.arrayBuffer());
+        let bin = "";
+        for (let i = 0; i < buf.length; i += 32768) bin += String.fromCharCode(...buf.subarray(i, i + 32768));
+        return { name: f.name, data: btoa(bin) };
+      }));
+      reviews[m.id] = await api("/milestones/" + m.id + "/review", "POST", { deliverable: ta.value, auto_release: cb.checked, files });
+      if (reviews[m.id].verdict === "pass") { delete drafts[m.id]; delete attach[m.id]; }
       toast(reviews[m.id].verdict === "pass" ? "AI review passed" : "AI review: not met yet", reviews[m.id].verdict !== "pass");
     }));
   }
@@ -247,7 +261,7 @@ function updateGrid() {
       columnDefs: [
         { field: "project", headerName: "Project", hide: true },
         { field: "title", headerName: "Milestone", flex: 2, minWidth: 200, autoHeight: true,
-          cellRenderer: (p) => el("div", { style: "line-height:1.35;padding:7px 0" }, el("div", {}, p.value), el("div", { class: "muted", style: "font-size:12px" }, p.data.project)) },
+          cellRenderer: (p) => el("div", { style: "line-height:1.35;padding:7px 0;white-space:normal" }, el("div", {}, p.value), el("div", { class: "muted", style: "font-size:12px" }, p.data.project)) },
         { colId: "amount", headerName: "Amount", width: 125, type: "rightAligned", filter: "agNumberColumnFilter",
           valueGetter: (p) => parseFloat(p.data.amount) || 0, valueFormatter: (p) => "$" + p.value.toFixed(2) },
         { field: "status", headerName: "Status", width: 135,
