@@ -60,3 +60,13 @@ Contents of the zip archive:
 
 File naming follows the required convention: Bracket_3D.step, Bracket_Drawings.pdf and Bracket_Drawings.dxf. All files carry revision A and use the same dimensions: base plate 100 x 60 mm, flange 35 mm, four dia 5.5 mm holes at 80 x 36 mm spacing, material and thickness stated in the BOM.
 ```
+
+## 5. Milestone: flat-pattern DXF (attach `samples/relay_bracket_flat_pattern.dxf`, should pass)
+
+```
+Delivered: flat-pattern DXF file (relay_bracket_flat_pattern.dxf) for the 5052-H32 aluminium relay bracket, 1.5 mm thick. The file is in millimetres, all geometry is on a single layer, and it contains only the cut outline, the four holes and the bend line, with no other entities. Flat pattern 100 mm x 92.1 mm overall. Exactly four circular mounting holes, diameter 5.5 mm, with centres at (10, 12), (90, 12), (10, 48) and (90, 48) mm from the bottom-left corner. The cut outline is one closed polyline measuring 100 mm x 92.1 mm, the four holes are circle entities, and the bend line is a single line entity from (0, 57) to (100, 57), a continuous line across the full 100 mm width.
+```
+
+## 6. Negative test: a good description with the wrong file (should fail)
+
+Paste the description from section 5, but attach `samples/relay_bracket_flat_pattern_WRONG.dxf` instead. The text claims four 5.5 mm holes, one layer and a bend line at y = 57 mm, but the file has only three holes (one is 8 mm), a second layer, and the bend line at y = 50 mm. The server measures the file, so the review fails and cites the measured values, even though the written description is perfect.

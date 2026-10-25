@@ -69,6 +69,8 @@ def _connect() -> sqlite3.Connection:
 def init_db() -> None:
     with closing(_connect()) as conn:
         conn.executescript(SCHEMA)
+        if "file_facts" not in [r["name"] for r in conn.execute("PRAGMA table_info(reviews)")]:
+            conn.execute("ALTER TABLE reviews ADD COLUMN file_facts TEXT")
         conn.commit()
 
 
@@ -183,9 +185,10 @@ def add_review(mid: str, review: dict) -> None:
     """Store the full AI review (verdict, summary, per-criterion evidence) as an audit record."""
     with closing(_connect()) as conn:
         conn.execute(
-            "INSERT INTO reviews (milestone_id, verdict, summary, checks, missing, at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO reviews (milestone_id, verdict, summary, checks, missing, at, file_facts) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (mid, review["verdict"], review.get("summary", ""),
-             json.dumps(review.get("checks", [])), json.dumps(review.get("missing", [])), time.time()),
+             json.dumps(review.get("checks", [])), json.dumps(review.get("missing", [])), time.time(),
+             json.dumps(review.get("file_facts"))),
         )
         conn.commit()
 
@@ -194,6 +197,7 @@ def _review_row(row) -> dict:
     d = dict(row)
     d["checks"] = json.loads(d["checks"] or "[]")
     d["missing"] = json.loads(d["missing"] or "[]")
+    d["file_facts"] = json.loads(d["file_facts"]) if d.get("file_facts") else None
     return d
 
 

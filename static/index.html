@@ -81,7 +81,9 @@ footer{color:var(--muted);font-size:13px}
   <section>
     <h2>1. Scope a project with AI</h2>
     <label for="brief">Client brief</label>
-    <textarea id="brief">I need a CAD model and 2D manufacturing drawings for a sheet-metal mounting bracket that holds a 12 V relay box. It needs four mounting holes and drawings ready for a laser-cutting shop.</textarea>
+    <textarea id="brief">I need a laser-cut flat pattern for a small aluminium mounting bracket that holds a 12 V relay box. Deliver three things in sequence: (1) a 3D model of the bracket as a STEP file, (2) a flat-pattern DXF file ready for a laser-cutting shop, and (3) a PDF drawing with dimensions and tolerances.
+
+Specification: 5052-H32 aluminium, 1.5 mm thick. The flat pattern must be 100 mm by 92.1 mm overall. It needs exactly four circular mounting holes, each 5.5 mm in diameter, with centres at (10, 12), (90, 12), (10, 48) and (90, 48) mm measured from the bottom-left corner of the flat pattern. The bend line runs along the full width at 57 mm from the bottom edge. The DXF must be in millimetres and contain only the cut outline, the four holes and the bend line.</textarea>
     <div class="row">
       <div><label for="budget">Total budget (USD)</label><input type="text" id="budget" value="100.00"></div>
       <div><button class="btn" id="scopeBtn" type="button">Scope with AI</button></div>
@@ -165,6 +167,8 @@ function reviewBox(r) {
   for (const c of r.review.checks) ul.append(el("li", {}, el("span", { class: c.met ? "y" : "n" }, c.met ? "\u2713 " : "\u2717 "), c.criterion, c.evidence ? el("em", {}, c.evidence) : null));
   box.append(ul);
   if (r.review.missing && r.review.missing.length) box.append(el("div", { class: "miss" }, "Missing: " + r.review.missing.join("; ")));
+  const ff = r.review.file_facts;
+  box.append(el("div", { class: "muted", style: "font-size:13px;margin-top:6px" }, ff ? "Measured from uploaded DXF (" + ff.file_name + "): " + ff.width + " x " + ff.height + " " + ff.units + "; " + ff.hole_summary : "No DXF attached: judged from the written description only."));
   return box;
 }
 
@@ -188,14 +192,19 @@ function card(m) {
     const ta = el("textarea", { placeholder: "Describe the delivered work: what the drawing or model contains, dimensions, tolerances, views..." });
     ta.value = drafts[m.id] || "";
     ta.addEventListener("input", () => (drafts[m.id] = ta.value));
+    const fi = el("input", { type: "file", accept: ".dxf" });
     const cb = el("input", { type: "checkbox" });
     cb.checked = autoRelease[m.id] !== false;
     cb.addEventListener("change", () => (autoRelease[m.id] = cb.checked));
     actions.push(el("div", { style: "width:100%" }, ta,
+      el("label", { style: "font-weight:400" }, "Optional: attach the flat-pattern DXF (ASCII, max 2 MB). The server measures it: ", fi),
       el("label", { style: "font-weight:400" }, cb, " Release payment automatically if the AI review passes")));
     actions.push(btn("Submit for AI review", async () => {
       if (!ta.value.trim()) throw new Error("Describe the delivered work first");
-      reviews[m.id] = await api("/milestones/" + m.id + "/review", "POST", { deliverable: ta.value, auto_release: cb.checked });
+      const f = fi.files[0];
+      if (f && f.size > 2000000) throw new Error("The DXF file is larger than 2 MB");
+      const dxf = f ? await f.text() : null;
+      reviews[m.id] = await api("/milestones/" + m.id + "/review", "POST", { deliverable: ta.value, auto_release: cb.checked, dxf, dxf_name: f ? f.name : "" });
       if (reviews[m.id].verdict === "pass") delete drafts[m.id];
       toast(reviews[m.id].verdict === "pass" ? "AI review passed" : "AI review: not met yet", reviews[m.id].verdict !== "pass");
     }));
@@ -296,7 +305,7 @@ async function load(force) {
   try {
     const data = await api("/milestones");
     const s = JSON.stringify(data);
-    const typing = document.activeElement && ["TEXTAREA", "INPUT"].includes(document.activeElement.tagName) && document.activeElement.closest("#list");
+    const typing = [...document.querySelectorAll("#list input[type=file]")].some((i) => i.files.length) || document.activeElement && ["TEXTAREA", "INPUT"].includes(document.activeElement.tagName) && document.activeElement.closest("#list");
     if (!force && (s === lastJson || typing)) return;
     lastJson = s; milestones = data; render();
   } catch (e) { if (force) toast(e.message, true); }
