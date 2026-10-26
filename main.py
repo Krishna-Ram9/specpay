@@ -409,7 +409,8 @@ async def paypal_webhook(request: Request):
         log.warning("PAYPAL_WEBHOOK_ID not set: webhook signature NOT verified")
 
     etype = event.get("event_type", "")
-    if not db.mark_event(event.get("id", ""), etype):
+    event_id = event.get("id", "")
+    if event_id and db.event_seen(event_id):
         return {"received": True, "duplicate": True}  # PayPal retries; stay idempotent
 
     resource = event.get("resource", {})
@@ -430,6 +431,11 @@ async def paypal_webhook(request: Request):
                 db.transition(m["id"], "released", note="webhook: capture completed", capture_id=resource["id"])
         else:
             log.info("Unhandled event type: %s", etype)
-    except ValueError as exc:
+    except ValueError as exc:  # a retry cannot fix an out-of-order event, so it still counts as handled
         log.warning("Ignoring webhook that doesn't fit the milestone state: %s", exc)
+    except Exception:
+        log.exception("Webhook handling failed for %s; PayPal will retry", etype)
+        raise HTTPException(500, "Webhook handling failed")  # event NOT marked processed, so the retry is honoured
+    if event_id:
+        db.mark_event(event_id, etype)
     return {"received": True}

@@ -1,5 +1,7 @@
 # SpecPay
 
+![tests](https://github.com/Krishna-Ram9/specpay/actions/workflows/tests.yml/badge.svg)
+
 **AI-scoped milestones, PayPal-held funds, and payment released only when the work matches the spec.**
 
 Built for the PayPal AI Hackathon.
@@ -144,6 +146,15 @@ Requirements: Python 3.10 or newer, a PayPal developer account (free), and a Gro
 5. On a pass the milestone becomes `released` and the PayPal capture id appears. Check **History** for every step. The payment also shows in the seller's sandbox account at sandbox.paypal.com.
 
 **Test credentials for judges:** see the testing instructions on the Devpost submission page.
+
+## Run the tests
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest
+```
+
+The tests cover the milestone state machine, review storage, amount and input validation, the AI retry and fallback logic, every file analyser, and the whole payment flow with PayPal and the AI mocked (no network, no real money). GitHub Actions runs them on every push.
 
 ## Project layout
 

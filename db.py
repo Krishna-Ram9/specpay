@@ -161,6 +161,12 @@ def transition(mid: str, new_status: str, note: str | None = None, **fields) -> 
     return get(mid)
 
 
+def event_seen(event_id: str) -> bool:
+    """True if this webhook event was already handled successfully."""
+    with closing(_connect()) as conn:
+        return conn.execute("SELECT 1 FROM webhook_events WHERE id = ?", (event_id,)).fetchone() is not None
+
+
 def mark_event(event_id: str, event_type: str) -> bool:
     """Record a webhook event id. True if new, False if already processed."""
     with closing(_connect()) as conn:
