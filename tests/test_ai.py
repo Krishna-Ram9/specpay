@@ -119,3 +119,15 @@ def test_review_prompt_separates_trusted_facts_from_untrusted_excerpts(monkeypat
 def test_guard_rails_stay_in_the_prompts():
     assert "never run" in ai.REVIEW_SYSTEM and "SYNTAX ERROR" in ai.REVIEW_SYSTEM and "untrusted" in ai.REVIEW_SYSTEM
     assert "Never invent file names" in ai.SCOPE_SYSTEM and "trace back" in ai.SCOPE_SYSTEM
+
+
+def test_a_provider_can_name_its_model(monkeypatch):
+    seen = []
+
+    async def fake_groq(system, user, max_tokens, model=None):
+        seen.append(model)
+        return '{"ok": true}'
+    monkeypatch.setattr(ai, "_ask_groq", fake_groq)
+    assert run(ai._ask_once("groq:openai/gpt-oss-20b", "s", "u", 100)) == {"ok": True}
+    assert run(ai._ask_once("groq", "s", "u", 100)) == {"ok": True}
+    assert seen == ["openai/gpt-oss-20b", None]

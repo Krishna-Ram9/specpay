@@ -219,3 +219,16 @@ def test_out_of_order_webhook_is_ignored_not_retried(api):
     client.post(f"/milestones/{mid}/void", json={})
     assert client.post("/webhooks/paypal", json=auth_created("EV3")).status_code == 200
     assert client.get(f"/milestones/{mid}").json()["status"] == "voided"
+
+
+def test_clicking_hold_before_approving_in_paypal_gives_a_clear_message(api, monkeypatch):
+    client, _ = api
+    mid = awaiting(client)
+
+    async def not_approved(method, path, json=None):
+        raise main.HTTPException(422, {"name": "UNPROCESSABLE_ENTITY", "details": [{"issue": "ORDER_NOT_APPROVED"}]})
+    monkeypatch.setattr(main, "paypal", not_approved)
+    r = client.post(f"/milestones/{mid}/authorize")
+    assert r.status_code == 409 and "has not received your approval" in r.json()["detail"]
+    assert "ORDER_NOT_APPROVED" not in r.text
+    assert client.get(f"/milestones/{mid}").json()["status"] == "awaiting_payment"

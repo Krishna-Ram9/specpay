@@ -184,7 +184,13 @@ async def authorize(mid: str):
     """Call after the buyer approves. Holds the funds."""
     m = get_or_404(mid)
     require_status(m, "awaiting_payment")
-    res = await paypal("POST", f"/v2/checkout/orders/{m['order_id']}/authorize")
+    try:
+        res = await paypal("POST", f"/v2/checkout/orders/{m['order_id']}/authorize")
+    except HTTPException as exc:
+        if "ORDER_NOT_APPROVED" in str(exc.detail):
+            raise HTTPException(409, "PayPal has not received your approval yet. Click \"1. Approve in PayPal\", complete the purchase there, "
+                                     "then come back and click \"2. I approved: hold the funds\".")
+        raise
     auth = res["purchase_units"][0]["payments"]["authorizations"][0]
     return db.transition(mid, "funded", note="funds held", auth_id=auth["id"])
 

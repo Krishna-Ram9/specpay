@@ -126,11 +126,11 @@ def _salvage_groq(r) -> str | None:
         return None
 
 
-async def _ask_groq(system: str, user: str, max_tokens: int) -> str:
+async def _ask_groq(system: str, user: str, max_tokens: int, model: str | None = None) -> str:
     key = os.getenv("GROQ_API_KEY")
     if not key:
         raise AIError("GROQ_API_KEY is not set on the server")
-    model = os.getenv("GROQ_MODEL", GROQ_DEFAULT_MODEL)
+    model = model or os.getenv("GROQ_MODEL", GROQ_DEFAULT_MODEL)
     effort = os.getenv("GROQ_REASONING_EFFORT")  # optional: low | medium | high (reasoning models)
     headers = {"Authorization": f"Bearer {key}", "content-type": "application/json"}
     payload = {
@@ -200,9 +200,10 @@ async def _ask_gemini(system: str, user: str, max_tokens: int) -> str:
 
 async def _ask_once(provider: str, system: str, user: str, max_tokens: int) -> dict:
     """Call one provider (groq | gemini | anthropic) and return parsed JSON."""
+    provider, _, model = provider.partition(":")  # "groq:some-model" picks a specific model
     try:
         if provider == "groq":
-            text = await _ask_groq(system, user, max_tokens)
+            text = await _ask_groq(system, user, max_tokens, model or None)
         elif provider == "gemini":
             text = await _ask_gemini(system, user, max_tokens)
         elif provider == "anthropic":
