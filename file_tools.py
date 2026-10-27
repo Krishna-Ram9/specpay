@@ -40,6 +40,22 @@ def _dxf(name, raw):
     return {**f, "summary": f"{f['width']} x {f['height']} mm; {f['hole_summary']}", "details": dxf_tools.describe(f)}, None
 
 
+def _protocol(schema: str):
+    """Name the STEP application protocol from the schema string (AUTOMOTIVE_DESIGN is AP214)."""
+    u = schema.upper()
+    if u.startswith("AUTOMOTIVE_DESIGN") or re.search(r"\b214\b", u):
+        return "AP214"
+    if u.startswith("CONFIG_CONTROL_DESIGN") or u.startswith("AP203"):
+        return "AP203"
+    if "AP242" in u or "MANAGED_MODEL_BASED_3D_ENGINEERING" in u:
+        return "AP242"
+    return None
+
+
+def _extent(points, k):
+    return [round((max(p[a] for p in points) - min(p[a] for p in points)) * k, 2) for a in range(3)] if points else None
+
+
 def _step(name, raw):
     t = _dec(raw)
     if not t.lstrip().startswith("ISO-10303-21"):
@@ -61,21 +77,43 @@ def _step(name, raw):
             pts[int(i)] = v
     verts = [int(v) for v in re.findall(r"VERTEX_POINT\s*\(\s*'[^']*'\s*,\s*#(\d+)\s*\)", up)]
     use = [pts[v] for v in verts if v in pts] or list(pts.values())
-    ext = [round((max(p[a] for p in use) - min(p[a] for p in use)) * k, 2) for a in range(3)] if use else None
+    ext = _extent(use, k)
+    ext_all = _extent(list(pts.values()), k)
     groups = {}
     for r in re.findall(r"CYLINDRICAL_SURFACE\s*\(\s*'[^']*'\s*,\s*#\d+\s*,\s*(" + _NUM + r")\s*\)", up)[:500]:
         d = round(float(r) * k * 2, 2)
         groups[d] = groups.get(d, 0) + 1
     solids = len(re.findall(r"MANIFOLD_SOLID_BREP|BREP_WITH_VOIDS", up))
     faces = len(re.findall(r"ADVANCED_FACE", up))
-    lines = [f"STEP file: schema {_clean(sch.group(1)) if sch else 'unknown'}; units {units}; solids: {solids}; faces: {faces}"]
+    proto = _protocol(sch.group(1)) if sch else None
+    desc = re.search(r"FILE_DESCRIPTION\s*\(\s*\(\s*'([^']{0,80})'", t)
+    fn = re.search(r"FILE_NAME\s*\(\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*\([^)]*\)\s*,\s*\([^)]*\)\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*\)", t)
+    head = ((f"; application protocol {proto}" if proto else "")
+            + (f"; description in the file header: {_clean(desc.group(1), 60)}" if desc else "")
+            + (f"; exporting system named in the file header: {_clean(fn.group(4), 60)}" if fn and fn.group(4).strip() else ""))
+    inch = units.startswith("inch")
+    inn = lambda v: f" ({v / 25.4:.3f} in)" if inch else ""
+    lines = [f"STEP file: schema {_clean(sch.group(1)) if sch else 'unknown'}{head}; units {units}; solids: {solids}; faces: {faces}"]
     if ext:
-        lines.append(f"Bounding box of the model's vertices: {ext[0]} x {ext[1]} x {ext[2]} mm; "
-                     f"smallest extent (the thickness of a plate-like part): {min(ext)} mm")
+        same = ext_all is None or all(abs(x - y) < 0.01 for x, y in zip(ext, ext_all))
+        fmt = lambda e: f"{e[0]} x {e[1]} x {e[2]} mm" + (f" ({e[0] / 25.4:.3f} x {e[1] / 25.4:.3f} x {e[2] / 25.4:.3f} in)" if inch else "")
+        if same:
+            lines.append(f"Bounding box of the model: {fmt(ext)}; smallest extent: {min(ext)} mm "
+                         "(this equals the thickness only for plate-like or sheet-metal parts)")
+        else:
+            lines.append(f"Bounding box of the model's vertices: {fmt(ext)} (a lower bound: curved edges can extend past their end vertices). "
+                         f"Bounding box including every reference point in the file: {fmt(ext_all)} (an upper-end estimate: reference points "
+                         "can lie outside the part). The part has curved geometry, so its true overall size is approximate, roughly between "
+                         "these two boxes. Do not treat the smallest extent as a thickness.")
     if groups:
-        lines.append("Cylindrical surfaces by diameter: " + ", ".join(f"{n} x dia {d:.2f} mm" for d, n in sorted(groups.items()))
+        lines.append("Cylindrical surfaces by diameter: " + ", ".join(f"{n} x dia {d:.2f} mm{inn(d)}" for d, n in sorted(groups.items()))
                      + " (a round hole is often modelled as two half-cylinders, so counts can be double the hole count)")
-    box = f"bbox {ext[0]} x {ext[1]} x {ext[2]} mm" if ext else "no geometry found"
+    if not ext:
+        box = "no geometry found"
+    elif ext_all is None or all(abs(x - y) < 0.01 for x, y in zip(ext, ext_all)):
+        box = f"bbox {ext[0]} x {ext[1]} x {ext[2]} mm"
+    else:
+        box = f"approx size {ext[0]} x {ext[1]} x {ext[2]} to {ext_all[0]} x {ext_all[1]} x {ext_all[2]} mm (curved part)"
     return {"summary": f"STEP: {solids} solid(s), {faces} faces, {box}", "details": "\n".join(lines)}, None
 
 
